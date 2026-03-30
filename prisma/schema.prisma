@@ -13,8 +13,15 @@ model User {
   email         String?  @unique
   image         String?
   emailVerified DateTime?
+
   accounts      Account[]
   sessions      Session[]
+
+  sentRequests     FriendRequest[] @relation("SentRequests")
+  receivedRequests FriendRequest[] @relation("ReceivedRequests")
+
+  friendships1 Friendship[] @relation("UserFriends1")
+  friendships2 Friendship[] @relation("UserFriends2")
 }
 
 model Account {
@@ -40,4 +47,29 @@ model Session {
   expires      DateTime
 
   user User @relation(fields: [userId], references: [id])
+}
+
+model FriendRequest {
+  id        String   @id @default(auto()) @map("_id") @db.ObjectId
+  senderId  String   @db.ObjectId
+  receiverId String  @db.ObjectId
+  status    String   @default("PENDING") 
+  createdAt DateTime @default(now())
+
+  sender   User @relation("SentRequests", fields: [senderId], references: [id])
+  receiver User @relation("ReceivedRequests", fields: [receiverId], references: [id])
+
+  @@unique([senderId, receiverId]) 
+}
+
+model Friendship {
+  id        String   @id @default(auto()) @map("_id") @db.ObjectId
+  user1Id   String   @db.ObjectId
+  user2Id   String   @db.ObjectId
+  createdAt DateTime @default(now())
+
+  user1 User @relation("UserFriends1", fields: [user1Id], references: [id])
+  user2 User @relation("UserFriends2", fields: [user2Id], references: [id])
+
+  @@unique([user1Id, user2Id])
 }
