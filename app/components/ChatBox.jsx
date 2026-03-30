@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import io from "socket.io-client";
 import { useSession } from "next-auth/react";
 
-const socket = io("http://localhost:3001");
+const socket = io(process.env.RENDER_CLOUD || "http://localhost:3001");
 
 export default function ChatBox({ receiverId }) {
   const { data: session } = useSession();
