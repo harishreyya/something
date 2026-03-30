@@ -2,6 +2,7 @@ import { getServerSession } from "next-auth";
 import { authOptions } from "../lib/auth";
 import { redirect } from "next/navigation";
 import LogoutButton from "./components/LogoutButton";
+import Navbar from "./components/Navbar";
 
 export default async function Home() {
   const session = await getServerSession(authOptions);
@@ -11,7 +12,10 @@ export default async function Home() {
   }
 
   return (
+    <>
+    <Navbar/>
     <div className="flex flex-col items-center justify-center min-h-screen bg-gray-900 text-white">
+      
       
       <img
         src={session.user.image}
@@ -24,5 +28,6 @@ export default async function Home() {
 
       <LogoutButton />
     </div>
+    </>
   );
 }

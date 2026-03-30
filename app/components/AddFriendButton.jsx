@@ -2,8 +2,8 @@
 import { useState } from "react";
 
 export default function AddFriendButton({ userId, status }) {
-  const [loading, setLoading] = useState(false);
   const [currentStatus, setCurrentStatus] = useState(status);
+  const [loading, setLoading] = useState(false);
 
   const sendRequest = async () => {
     setLoading(true);
@@ -20,27 +20,44 @@ export default function AddFriendButton({ userId, status }) {
     setLoading(false);
   };
 
+  const unfriend = async () => {
+    setLoading(true);
+
+    await fetch("/api/friends/unfriend", {
+      method: "POST",
+      body: JSON.stringify({ friendId: userId }),
+    });
+
+    setCurrentStatus("NONE");
+    setLoading(false);
+  };
+
+  // ✅ FRIENDS
   if (currentStatus === "FRIENDS") {
     return (
-      <button className="px-4 py-2 bg-green-500 text-white rounded-lg cursor-default">
-        Friends ✓
+      <button
+        onClick={unfriend}
+        className="px-4 py-2 bg-red-500 text-white rounded-lg hover:bg-red-600"
+      >
+        Unfriend
       </button>
     );
   }
 
   if (currentStatus === "PENDING") {
     return (
-      <button className="px-4 py-2 bg-gray-400 text-white rounded-lg cursor-not-allowed">
+      <button className="px-4 py-2 bg-gray-400 text-white rounded-lg">
         Pending
       </button>
     );
   }
 
+
   return (
     <button
       onClick={sendRequest}
       disabled={loading}
-      className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition"
+      className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
     >
       {loading ? "Sending..." : "Add Friend"}
     </button>

@@ -1,6 +1,6 @@
+import { PrismaClient } from "@prisma/client";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
-import { PrismaClient } from "@prisma/client";
 
 const prisma = new PrismaClient();
 
@@ -9,21 +9,17 @@ export async function POST(req) {
   if (!session) return Response.json({ error: "Unauthorized" }, { status: 401 });
 
   const { receiverId } = await req.json();
+  const senderId = session.user.id;
 
-  if (!receiverId) {
-    return Response.json({ error: "Receiver required" }, { status: 400 });
-  }
-
-  if (receiverId === session.user.id) {
+  if (receiverId === senderId) {
     return Response.json({ error: "Cannot send to yourself" }, { status: 400 });
   }
-
 
   const existingFriend = await prisma.friendship.findFirst({
     where: {
       OR: [
-        { user1Id: session.user.id, user2Id: receiverId },
-        { user1Id: receiverId, user2Id: session.user.id },
+        { user1Id: senderId, user2Id: receiverId },
+        { user1Id: receiverId, user2Id: senderId },
       ],
     },
   });
@@ -34,18 +30,27 @@ export async function POST(req) {
 
   const existingRequest = await prisma.friendRequest.findFirst({
     where: {
-      senderId: session.user.id,
+      senderId,
       receiverId,
     },
   });
 
   if (existingRequest) {
-    return Response.json({ error: "Request already sent" }, { status: 400 });
+    if (existingRequest.status === "PENDING") {
+      return Response.json({ error: "Request already sent" }, { status: 400 });
+    }
+
+    const updated = await prisma.friendRequest.update({
+      where: { id: existingRequest.id },
+      data: { status: "PENDING" },
+    });
+
+    return Response.json(updated);
   }
 
   const request = await prisma.friendRequest.create({
     data: {
-      senderId: session.user.id,
+      senderId,
       receiverId,
     },
   });
