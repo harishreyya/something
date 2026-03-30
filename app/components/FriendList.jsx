@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useState } from "react";
 
 export default function FriendList() {
@@ -58,12 +59,20 @@ export default function FriendList() {
             </div>
           </div>
 
-          <button
-            onClick={() => unfriend(f.id)}
-            className="px-4 py-2 bg-red-500 text-white rounded-lg hover:bg-red-600 transition text-sm"
-          >
-            Unfriend
-          </button>
+          <div className="flex gap-2">
+  <Link href={`/chat/${f.id}`}>
+    <button className="px-4 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 text-sm">
+      Chat
+    </button>
+  </Link>
+
+  <button
+    onClick={() => unfriend(f.id)}
+    className="px-4 py-2 bg-red-500 text-white rounded-lg hover:bg-red-600 text-sm"
+  >
+    Unfriend
+  </button>
+</div>
         </div>
       ))}
     </div>
