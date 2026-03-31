@@ -78,11 +78,12 @@ model Friendship {
 }
 
 model Message {
-  id        String   @id @default(auto()) @map("_id") @db.ObjectId
-  senderId  String   @db.ObjectId
-  receiverId String  @db.ObjectId
-  text      String
-  createdAt DateTime @default(now())
+  id         String   @id @default(auto()) @map("_id") @db.ObjectId
+  senderId   String   @db.ObjectId
+  receiverId String   @db.ObjectId
+  text       String
+  createdAt  DateTime @default(now())
+  seen       Boolean  @default(false) 
 
   sender   User @relation("SentMessages", fields: [senderId], references: [id])
   receiver User @relation("ReceivedMessages", fields: [receiverId], references: [id])

@@ -32,7 +32,7 @@ export default function AddFriendButton({ userId, status }) {
     setLoading(false);
   };
 
-  // ✅ FRIENDS
+  
   if (currentStatus === "FRIENDS") {
     return (
       <button
