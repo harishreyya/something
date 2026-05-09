@@ -131,7 +131,7 @@ useEffect(() => {
     <div className="flex flex-col h-screen bg-gray-100">
       
     
-      <div className="p-4 bg-white shadow flex items-center gap-3">
+      <div className="p-4 bg-white shadow flex items-center gap-3 mt-16">
         <img src={receiver.image} className="w-10 h-10 rounded-full" />
         <div>
           <p className="font-semibold">{receiver.name}</p>
