@@ -40,7 +40,7 @@ const receiverSocket = users[String(receiverId)];
     }
   });
 
-  socket.on("mark_seen", ({ senderId }) => {
+socket.on("mark_seen", ({ senderId }) => {
     const senderSocket = users[String(senderId)];
 
     if (senderSocket) {
@@ -48,7 +48,37 @@ const receiverSocket = users[String(receiverId)];
     }
   });
 
- socket.on("disconnect", () => {
+  socket.on("call_user", ({ callerId, receiverId, signalData }) => {
+    const receiverSocket = users[String(receiverId)];
+
+    if (receiverSocket) {
+      io.to(receiverSocket).emit("incoming_call", {
+        callerId,
+        signalData,
+        callerName: callerId,
+      });
+    }
+  });
+
+  socket.on("answer_call", ({ callerId, receiverId, signalData }) => {
+    const callerSocket = users[String(callerId)];
+
+    if (callerSocket) {
+      io.to(callerSocket).emit("call_accepted", {
+        signalData,
+        receiverId,
+      });
+    }
+  });
+
+  socket.on("end_call", ({ receiverId }) => {
+    const receiverSocket = users[String(receiverId)];
+    if (receiverSocket) {
+      io.to(receiverSocket).emit("call_ended");
+    }
+  });
+
+  socket.on("disconnect", () => {
     for (let userId in users) {
       if (users[userId] === socket.id) {
         delete users[userId];
