@@ -16,18 +16,62 @@ export default function ChatBox({ receiver, onBack }) {
   const [incomingCall, setIncomingCall] = useState(null);
   const [callAccepted, setCallAccepted] = useState(false);
   const [callEnded, setCallEnded] = useState(false);
+  const [localStream, setLocalStream] = useState(null);
+  const [remoteStream, setRemoteStream] = useState(null);
 
-  const localStreamRef = useRef(null);
-  const remoteStreamRef = useRef(null);
   const peerConnectionRef = useRef(null);
+  const localAudioRef = useRef(null);
+  const remoteAudioRef = useRef(null);
 
   const bottomRef = useRef();
 
-  const iceServers = {
-    iceServers: [
-      { urls: "stun:stun.l.google.com:19302" },
-      { urls: "stun:stun1.l.google.com:19302" },
-    ],
+  useEffect(() => {
+    if (localAudioRef.current) {
+      localAudioRef.current.srcObject = localStream;
+    }
+  }, [localStream]);
+
+  useEffect(() => {
+    if (remoteAudioRef.current) {
+      remoteAudioRef.current.srcObject = remoteStream;
+    }
+  }, [remoteStream]);
+
+  const iceServers = [
+    { urls: "stun:stun.l.google.com:19302" },
+    { urls: "stun:stun1.l.google.com:19302" },
+  ];
+
+  const endCall = (triggeredByRemote = false) => {
+    console.log("Ending call", triggeredByRemote ? "(remote)" : "(local)");
+    
+    if (!localStream && !peerConnectionRef.current && !remoteStream) {
+      console.log("Call already ended, ignoring");
+      return;
+    }
+
+    if (localStream) {
+      localStream.getTracks().forEach((track) => track.stop());
+      setLocalStream(null);
+    }
+
+    if (peerConnectionRef.current) {
+      peerConnectionRef.current.close();
+      peerConnectionRef.current = null;
+    }
+
+    setRemoteStream(null);
+    setInCall(false);
+    setCalling(false);
+    setCallAccepted(false);
+    setCallEnded(true);
+    setIncomingCall(null);
+
+    if (!triggeredByRemote && socket && receiver?.id) {
+      socket.emit("end_call", { receiverId: receiver.id });
+    }
+
+    setTimeout(() => setCallEnded(false), 1000);
   };
 
   useEffect(() => {
@@ -66,43 +110,9 @@ export default function ChatBox({ receiver, onBack }) {
     if (!socket) return;
 
     socket.on("incoming_call", async ({ callerId, signalData, callerName }) => {
-      setIncomingCall({ callerId, callerName });
-      try {
-        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-        localStreamRef.current = stream;
-        const pc = new RTCPeerConnection(iceServers);
-        peerConnectionRef.current = pc;
-
-        stream.getTracks().forEach((track) => pc.addTrack(track, stream));
-
-        pc.onicecandidate = (event) => {
-          if (event.candidate) {
-            socket.emit("answer_call", {
-              callerId,
-              receiverId: session.user.id,
-              signalData: { type: "candidate", candidate: event.candidate },
-            });
-          }
-        };
-
-        pc.ontrack = (event) => {
-          remoteStreamRef.current = event.streams[0];
-        };
-
-        await pc.setRemoteDescription(new RTCSessionDescription(signalData));
-        const answer = await pc.createAnswer();
-        await pc.setLocalDescription(answer);
-
-        socket.emit("answer_call", {
-          callerId,
-          receiverId: session.user.id,
-          signalData: answer,
-        });
-
-        setInCall(true);
-        setCallAccepted(true);
-      } catch (err) {
-        console.error("Error answering call:", err);
+      console.log("Incoming call from", callerId, "signal type:", signalData?.type);
+      if (signalData?.type === "offer") {
+        setIncomingCall({ callerId, callerName, signalData });
       }
     });
 
@@ -113,11 +123,13 @@ export default function ChatBox({ receiver, onBack }) {
     if (!socket) return;
 
     socket.on("call_accepted", async ({ signalData, receiverId }) => {
+      console.log("Call accepted, signal type:", signalData?.type);
       try {
         const pc = peerConnectionRef.current;
-        if (pc && signalData.type === "answer") {
+        if (pc && signalData?.type === "answer") {
           await pc.setRemoteDescription(new RTCSessionDescription(signalData));
           setCallAccepted(true);
+          console.log("Remote description set successfully");
         }
       } catch (err) {
         console.error("Error accepting call:", err);
@@ -125,12 +137,31 @@ export default function ChatBox({ receiver, onBack }) {
     });
 
     socket.on("call_ended", () => {
-      endCall();
+      console.log("Received call_ended event");
+      endCall(true);
+    });
+
+    socket.on("ice_candidate", async ({ candidate, from }) => {
+      if (!peerConnectionRef.current) {
+        console.log("Ignoring ICE candidate - no active peer connection");
+        return;
+      }
+      console.log("Received ICE candidate from", from);
+      try {
+        const pc = peerConnectionRef.current;
+        if (pc && candidate) {
+          await pc.addIceCandidate(new RTCIceCandidate(candidate));
+          console.log("ICE candidate added successfully");
+        }
+      } catch (err) {
+        console.error("Error adding ICE candidate:", err);
+      }
     });
 
     return () => {
       socket.off("call_accepted");
       socket.off("call_ended");
+      socket.off("ice_candidate");
     };
   }, [socket]);
 
@@ -212,16 +243,18 @@ export default function ChatBox({ receiver, onBack }) {
   const startCall = async () => {
     try {
       setCalling(true);
+      console.log("Starting call...");
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      localStreamRef.current = stream;
+      setLocalStream(stream);
 
-      const pc = new RTCPeerConnection(iceServers);
+      const pc = new RTCPeerConnection({ iceServers });
       peerConnectionRef.current = pc;
 
       stream.getTracks().forEach((track) => pc.addTrack(track, stream));
 
       pc.onicecandidate = (event) => {
         if (event.candidate) {
+          console.log("Sending ICE candidate from caller");
           socket.emit("call_user", {
             callerId: session.user.id,
             receiverId: receiver.id,
@@ -231,7 +264,8 @@ export default function ChatBox({ receiver, onBack }) {
       };
 
       pc.ontrack = (event) => {
-        remoteStreamRef.current = event.streams[0];
+        console.log("Received remote track");
+        setRemoteStream(event.streams[0]);
       };
 
       const offer = await pc.createOffer();
@@ -243,6 +277,7 @@ export default function ChatBox({ receiver, onBack }) {
         signalData: offer,
       });
 
+      console.log("Offer sent");
       setInCall(true);
     } catch (err) {
       console.error("Error starting call:", err);
@@ -251,32 +286,57 @@ export default function ChatBox({ receiver, onBack }) {
   };
 
   const answerCall = async () => {
-    setInCall(true);
-    setIncomingCall(null);
-    setCallAccepted(true);
-  };
+    if (!incomingCall) return;
+    
+    try {
+      console.log("Answering call from", incomingCall.callerId);
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      setLocalStream(stream);
 
-  const endCall = () => {
-    if (localStreamRef.current) {
-      localStreamRef.current.getTracks().forEach((track) => track.stop());
-      localStreamRef.current = null;
+      const pc = new RTCPeerConnection({ iceServers });
+      peerConnectionRef.current = pc;
+
+      stream.getTracks().forEach((track) => pc.addTrack(track, stream));
+
+      pc.onicecandidate = (event) => {
+        if (event.candidate) {
+          console.log("Sending ICE candidate from receiver");
+          socket.emit("answer_call", {
+            callerId: incomingCall.callerId,
+            receiverId: session.user.id,
+            signalData: { type: "candidate", candidate: event.candidate },
+          });
+        }
+      };
+
+      pc.ontrack = (event) => {
+        console.log("Received remote track");
+        setRemoteStream(event.streams[0]);
+      };
+
+      console.log("Signal data before setting remote:", incomingCall.signalData);
+      if (!incomingCall.signalData || incomingCall.signalData.type !== "offer") {
+        console.error("Invalid signal data - not an offer:", incomingCall.signalData);
+        return;
+      }
+      await pc.setRemoteDescription(new RTCSessionDescription(incomingCall.signalData));
+      
+      const answer = await pc.createAnswer();
+      await pc.setLocalDescription(answer);
+
+      socket.emit("answer_call", {
+        callerId: incomingCall.callerId,
+        receiverId: session.user.id,
+        signalData: answer,
+      });
+
+      console.log("Answer sent");
+      setInCall(true);
+      setIncomingCall(null);
+      setCallAccepted(true);
+    } catch (err) {
+      console.error("Error answering call:", err);
     }
-
-    if (peerConnectionRef.current) {
-      peerConnectionRef.current.close();
-      peerConnectionRef.current = null;
-    }
-
-    remoteStreamRef.current = null;
-    setInCall(false);
-    setCalling(false);
-    setCallAccepted(false);
-    setCallEnded(true);
-    setIncomingCall(null);
-
-    socket.emit("end_call", { receiverId: receiver.id });
-
-    setTimeout(() => setCallEnded(false), 1000);
   };
 
   return (
@@ -322,6 +382,9 @@ export default function ChatBox({ receiver, onBack }) {
         </div>
       )}
 
+      <audio ref={localAudioRef} autoPlay muted />
+      <audio ref={remoteAudioRef} autoPlay />
+
       {incomingCall && !inCall && (
         <div className="bg-blue-100 p-4 text-center flex items-center justify-center gap-3">
           <span>📞 Incoming call from {incomingCall.callerName}</span>
@@ -359,7 +422,7 @@ export default function ChatBox({ receiver, onBack }) {
                 <p>{m.text}</p>
 
                 <p className="text-[10px] mt-1 opacity-70 text-right">
-                  {new Date(m.createdAt || Date.now()).toLocaleTimeString([], {
+                  {new Date(m.createdAt || 0).toLocaleTimeString([], {
                     hour: "2-digit",
                     minute: "2-digit",
                   })}

@@ -52,11 +52,18 @@ socket.on("mark_seen", ({ senderId }) => {
     const receiverSocket = users[String(receiverId)];
 
     if (receiverSocket) {
-      io.to(receiverSocket).emit("incoming_call", {
-        callerId,
-        signalData,
-        callerName: callerId,
-      });
+      if (signalData.type === "offer") {
+        io.to(receiverSocket).emit("incoming_call", {
+          callerId,
+          signalData,
+          callerName: callerId,
+        });
+      } else if (signalData.type === "candidate") {
+        io.to(receiverSocket).emit("ice_candidate", {
+          candidate: signalData.candidate,
+          from: callerId,
+        });
+      }
     }
   });
 
@@ -64,10 +71,17 @@ socket.on("mark_seen", ({ senderId }) => {
     const callerSocket = users[String(callerId)];
 
     if (callerSocket) {
-      io.to(callerSocket).emit("call_accepted", {
-        signalData,
-        receiverId,
-      });
+      if (signalData.type === "answer") {
+        io.to(callerSocket).emit("call_accepted", {
+          signalData,
+          receiverId,
+        });
+      } else if (signalData.type === "candidate") {
+        io.to(callerSocket).emit("ice_candidate", {
+          candidate: signalData.candidate,
+          from: receiverId,
+        });
+      }
     }
   });
 
