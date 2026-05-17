@@ -32,14 +32,17 @@ export default function ChatBox({ receiver, onBack }) {
   }, [localStream]);
 
   useEffect(() => {
-    if (remoteAudioRef.current) {
+    if (remoteAudioRef.current && remoteStream) {
       remoteAudioRef.current.srcObject = remoteStream;
+      remoteAudioRef.current.play().catch(err => console.log("Autoplay blocked:", err.message));
     }
   }, [remoteStream]);
 
   const iceServers = [
     { urls: "stun:stun.l.google.com:19302" },
     { urls: "stun:stun1.l.google.com:19302" },
+    { urls: "turn:global.metered.ca:80", username: "anonymous", credential: "anonymous" },
+    { urls: "turn:global.metered.ca:443", username: "anonymous", credential: "anonymous" },
   ];
 
   const endCall = (triggeredByRemote = false) => {
@@ -382,8 +385,8 @@ export default function ChatBox({ receiver, onBack }) {
         </div>
       )}
 
-      <audio ref={localAudioRef} autoPlay muted />
-      <audio ref={remoteAudioRef} autoPlay />
+      <audio ref={localAudioRef} autoPlay muted playsInline />
+      <audio ref={remoteAudioRef} autoPlay playsInline />
 
       {incomingCall && !inCall && (
         <div className="bg-blue-100 p-4 text-center flex items-center justify-center gap-3">
