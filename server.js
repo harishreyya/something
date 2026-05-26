@@ -101,6 +101,55 @@ socket.on("mark_seen", ({ senderId }) => {
     }
   });
 
+  socket.on("video_call_user", ({ callerId, receiverId, signalData, callerName }) => {
+    const receiverSocket = users[String(receiverId)];
+
+    if (receiverSocket) {
+      if (signalData.type === "offer") {
+        io.to(receiverSocket).emit("video_incoming_call", {
+          callerId,
+          signalData,
+          callerName: callerName || callerId,
+        });
+
+        const callerSocket = users[String(callerId)];
+        if (callerSocket) {
+          io.to(callerSocket).emit("video_call_ringing");
+        }
+      } else if (signalData.type === "candidate") {
+        io.to(receiverSocket).emit("video_ice_candidate", {
+          candidate: signalData.candidate,
+          from: callerId,
+        });
+      }
+    }
+  });
+
+  socket.on("video_answer_call", ({ callerId, receiverId, signalData, callerName }) => {
+    const callerSocket = users[String(callerId)];
+
+    if (callerSocket) {
+      if (signalData.type === "answer") {
+        io.to(callerSocket).emit("video_call_accepted", {
+          signalData,
+          receiverId,
+        });
+      } else if (signalData.type === "candidate") {
+        io.to(callerSocket).emit("video_ice_candidate", {
+          candidate: signalData.candidate,
+          from: receiverId,
+        });
+      }
+    }
+  });
+
+  socket.on("video_end_call", ({ receiverId }) => {
+    const receiverSocket = users[String(receiverId)];
+    if (receiverSocket) {
+      io.to(receiverSocket).emit("video_call_ended");
+    }
+  });
+
   socket.on("disconnect", () => {
     for (let userId in users) {
       if (users[userId] === socket.id) {

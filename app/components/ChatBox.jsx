@@ -24,10 +24,14 @@ export default function ChatBox({ receiver, onBack }) {
   const [isReceivingCall, setIsReceivingCall] = useState(false);
   const [showCallScreen, setShowCallScreen] = useState(false);
   const [isRinging, setIsRinging] = useState(false);
+  const [callType, setCallType] = useState(null);
+  const [isCameraOn, setIsCameraOn] = useState(true);
 
   const peerConnectionRef = useRef(null);
   const localAudioRef = useRef(null);
   const remoteAudioRef = useRef(null);
+  const localVideoRef = useRef(null);
+  const remoteVideoRef = useRef(null);
   const callTimerRef = useRef(null);
   const ringtoneOscillatorRef = useRef(null);
   const ringtoneIntervalRef = useRef(null);
@@ -44,6 +48,19 @@ export default function ChatBox({ receiver, onBack }) {
     if (remoteAudioRef.current && remoteStream) {
       remoteAudioRef.current.srcObject = remoteStream;
       remoteAudioRef.current.play().catch(err => console.log("Autoplay blocked:", err.message));
+    }
+  }, [remoteStream]);
+
+  useEffect(() => {
+    if (localVideoRef.current && localStream) {
+      localVideoRef.current.srcObject = localStream;
+    }
+  }, [localStream]);
+
+  useEffect(() => {
+    if (remoteVideoRef.current && remoteStream) {
+      remoteVideoRef.current.srcObject = remoteStream;
+      remoteVideoRef.current.play().catch(err => console.log("Autoplay blocked:", err.message));
     }
   }, [remoteStream]);
 
@@ -151,10 +168,13 @@ export default function ChatBox({ receiver, onBack }) {
     setIsReceivingCall(false);
     setIsMuted(false);
     setIsSpeakerOn(true);
+    setCallType(null);
+    setIsCameraOn(true);
 
     if (!triggeredByRemote && socket && receiver?.id) {
-      console.log("Emitting end_call to", receiver.id);
-      socket.emit("end_call", { receiverId: receiver.id });
+      const event = callType === "video" ? "video_end_call" : "end_call";
+      console.log(`Emitting ${event} to`, receiver.id);
+      socket.emit(event, { receiverId: receiver.id });
     }
 
     setTimeout(() => setCallEnded(false), 1000);
@@ -173,6 +193,15 @@ export default function ChatBox({ receiver, onBack }) {
     if (remoteAudioRef.current) {
       remoteAudioRef.current.volume = isSpeakerOn ? 0 : 1;
       setIsSpeakerOn(!isSpeakerOn);
+    }
+  };
+
+  const toggleCamera = () => {
+    if (localStream) {
+      localStream.getVideoTracks().forEach((track) => {
+        track.enabled = !isCameraOn;
+      });
+      setIsCameraOn(!isCameraOn);
     }
   };
 
@@ -215,6 +244,7 @@ export default function ChatBox({ receiver, onBack }) {
       console.log("Incoming call from", callerId, "signal type:", signalData?.type);
       if (signalData?.type === "offer") {
         setIncomingCall({ callerId, callerName, signalData });
+        setCallType("audio");
         setIsReceivingCall(true);
         setShowCallScreen(true);
         playRingtone();
@@ -226,9 +256,27 @@ export default function ChatBox({ receiver, onBack }) {
       setIsRinging(true);
     });
 
+    socket.on("video_incoming_call", async ({ callerId, signalData, callerName }) => {
+      console.log("Incoming video call from", callerId);
+      if (signalData?.type === "offer") {
+        setIncomingCall({ callerId, callerName, signalData });
+        setCallType("video");
+        setIsReceivingCall(true);
+        setShowCallScreen(true);
+        playRingtone();
+      }
+    });
+
+    socket.on("video_call_ringing", () => {
+      console.log("Video call is ringing...");
+      setIsRinging(true);
+    });
+
     return () => {
       socket.off("incoming_call");
       socket.off("call_ringing");
+      socket.off("video_incoming_call");
+      socket.off("video_call_ringing");
     };
   }, [socket, session]);
 
@@ -279,10 +327,55 @@ export default function ChatBox({ receiver, onBack }) {
       }
     });
 
+    socket.on("video_call_accepted", async ({ signalData, receiverId }) => {
+      console.log("Video call accepted, signal type:", signalData?.type);
+      stopRingtone();
+      setCallAccepted(true);
+      startCallTimer();
+      try {
+        const pc = peerConnectionRef.current;
+        if (pc && signalData?.type === "answer") {
+          await pc.setRemoteDescription(new RTCSessionDescription(signalData));
+          console.log("Remote description set successfully");
+        }
+      } catch (err) {
+        console.error("Error accepting video call:", err);
+      }
+    });
+
+    const handleVideoCallEnded = () => {
+      alert("Video call ended by other user!");
+      console.log("RECEIVED video_call_ended from other user");
+      endCall(true);
+    };
+    socket.on("video_call_ended", handleVideoCallEnded);
+    socket.io.on("reconnect", () => {
+      console.log("Socket reconnected, re-adding video_call_ended listener");
+      socket.on("video_call_ended", handleVideoCallEnded);
+    });
+
+    socket.on("video_ice_candidate", async ({ candidate, from }) => {
+      if (!peerConnectionRef.current) {
+        console.log("Ignoring ICE candidate - no active peer connection");
+        return;
+      }
+      try {
+        const pc = peerConnectionRef.current;
+        if (pc && candidate) {
+          await pc.addIceCandidate(new RTCIceCandidate(candidate));
+        }
+      } catch (err) {
+        console.error("Error adding ICE candidate:", err);
+      }
+    });
+
     return () => {
       socket.off("call_accepted");
       socket.off("call_ended", handleCallEnded);
       socket.off("ice_candidate");
+      socket.off("video_call_accepted");
+      socket.off("video_call_ended", handleVideoCallEnded);
+      socket.off("video_ice_candidate");
     };
   }, [socket]);
 
@@ -378,6 +471,7 @@ export default function ChatBox({ receiver, onBack }) {
     try {
       setCalling(true);
       setShowCallScreen(true);
+      setCallType("audio");
       console.log("Starting call...");
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       setLocalStream(stream);
@@ -425,11 +519,67 @@ export default function ChatBox({ receiver, onBack }) {
     }
   };
 
+  const startVideoCall = async () => {
+    try {
+      setCalling(true);
+      setShowCallScreen(true);
+      setCallType("video");
+      console.log("Starting video call...");
+      const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+      setLocalStream(stream);
+
+      const pc = new RTCPeerConnection({ iceServers });
+      peerConnectionRef.current = pc;
+
+      stream.getTracks().forEach((track) => pc.addTrack(track, stream));
+
+      pc.onicecandidate = (event) => {
+        if (event.candidate) {
+          console.log("Sending ICE candidate from video caller");
+          socket.emit("video_call_user", {
+            callerId: session.user.id,
+            receiverId: receiver.id,
+            signalData: { type: "candidate", candidate: event.candidate },
+            callerName: session.user.name,
+          });
+        }
+      };
+
+      pc.ontrack = (event) => {
+        console.log("Received remote video track");
+        stopRingtone();
+        setRemoteStream(event.streams[0]);
+        setInCall(true);
+        startCallTimer();
+      };
+
+      const offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
+
+      socket.emit("video_call_user", {
+        callerId: session.user.id,
+        receiverId: receiver.id,
+        signalData: offer,
+        callerName: session.user.name,
+      });
+
+      console.log("Video offer sent");
+      setInCall(true);
+      playRingtone();
+    } catch (err) {
+      console.error("Error starting video call:", err);
+      setCalling(false);
+      setShowCallScreen(false);
+      setCallType(null);
+    }
+  };
+
   const answerCall = async () => {
     if (!incomingCall) return;
     
     try {
       console.log("Answering call from", incomingCall.callerId);
+      setCallType("audio");
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       setLocalStream(stream);
 
@@ -479,6 +629,56 @@ export default function ChatBox({ receiver, onBack }) {
     }
   };
 
+  const answerVideoCall = async () => {
+    if (!incomingCall) return;
+    
+    try {
+      console.log("Answering video call from", incomingCall.callerId);
+      setCallType("video");
+      const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+      setLocalStream(stream);
+
+      const pc = new RTCPeerConnection({ iceServers });
+      peerConnectionRef.current = pc;
+
+      stream.getTracks().forEach((track) => pc.addTrack(track, stream));
+
+      pc.onicecandidate = (event) => {
+        if (event.candidate) {
+          console.log("Sending ICE candidate from video receiver");
+          socket.emit("video_answer_call", {
+            callerId: incomingCall.callerId,
+            receiverId: session.user.id,
+            signalData: { type: "candidate", candidate: event.candidate },
+          });
+        }
+      };
+
+      pc.ontrack = (event) => {
+        console.log("Received remote video track");
+        setRemoteStream(event.streams[0]);
+      };
+
+      await pc.setRemoteDescription(new RTCSessionDescription(incomingCall.signalData));
+      
+      const answer = await pc.createAnswer();
+      await pc.setLocalDescription(answer);
+
+      socket.emit("video_answer_call", {
+        callerId: incomingCall.callerId,
+        receiverId: session.user.id,
+        signalData: answer,
+      });
+
+      console.log("Video answer sent");
+      setInCall(true);
+      setIncomingCall(null);
+      setCallAccepted(true);
+    } catch (err) {
+      console.error("Error answering video call:", err);
+    }
+  };
+
   return (
     <div className="flex flex-col h-screen bg-gray-100">
       <audio ref={localAudioRef} autoPlay muted playsInline />
@@ -488,10 +688,10 @@ export default function ChatBox({ receiver, onBack }) {
         <div className="fixed inset-0 bg-gray-900 bg-opacity-95 flex flex-col items-center justify-center z-50">
           <div className="text-center">
             <div className="w-24 h-24 mx-auto mb-6 rounded-full bg-gray-700 flex items-center justify-center">
-              <span className="text-4xl">👤</span>
+              <span className="text-4xl">{callType === "video" ? "📹" : "👤"}</span>
             </div>
             <h2 className="text-2xl font-semibold text-white mb-2">{incomingCall.callerName}</h2>
-            <p className="text-lg text-gray-400 mb-8">Incoming call...</p>
+            <p className="text-lg text-gray-400 mb-8">{callType === "video" ? "Incoming video call..." : "Incoming call..."}</p>
             <div className="flex items-center justify-center gap-8">
               <button
                 onClick={() => {
@@ -499,8 +699,9 @@ export default function ChatBox({ receiver, onBack }) {
                   setIncomingCall(null);
                   setShowCallScreen(false);
                   setIsReceivingCall(false);
+                  setCallType(null);
                   if (socket && incomingCall?.callerId) {
-                    socket.emit("end_call", { receiverId: incomingCall.callerId });
+                    socket.emit(callType === "video" ? "video_end_call" : "end_call", { receiverId: incomingCall.callerId });
                   }
                 }}
                 className="w-16 h-16 rounded-full bg-red-600 hover:bg-red-700 flex items-center justify-center"
@@ -510,18 +711,22 @@ export default function ChatBox({ receiver, onBack }) {
               <button
                 onClick={() => {
                   stopRingtone();
-                  answerCall();
+                  if (callType === "video") {
+                    answerVideoCall();
+                  } else {
+                    answerCall();
+                  }
                 }}
                 className="w-16 h-16 rounded-full bg-green-500 hover:bg-green-600 flex items-center justify-center animate-pulse"
               >
-                <span className="text-2xl">📞</span>
+                <span className="text-2xl">{callType === "video" ? "📹" : "📞"}</span>
               </button>
             </div>
           </div>
         </div>
       )}
 
-      {showCallScreen && calling && !inCall && (
+      {showCallScreen && calling && !inCall && callType !== "video" && (
         <div className="fixed inset-0 bg-gray-900 bg-opacity-95 flex flex-col items-center justify-center z-50">
           <div className="text-center">
             <div className="w-24 h-24 mx-auto mb-6 rounded-full bg-gray-700 flex items-center justify-center">
@@ -547,7 +752,41 @@ export default function ChatBox({ receiver, onBack }) {
         </div>
       )}
 
-      {showCallScreen && inCall && (
+      {showCallScreen && calling && !inCall && callType === "video" && (
+        <div className="fixed inset-0 bg-gray-900 bg-opacity-95 flex flex-col items-center justify-center z-50">
+          <div className="relative w-full h-full flex flex-col items-center justify-center">
+            {localStream && (
+              <video
+                ref={localVideoRef}
+                autoPlay
+                muted
+                playsInline
+                className="absolute top-4 right-4 w-32 h-48 rounded-xl object-cover border-2 border-gray-600 z-10"
+              />
+            )}
+            <div className="text-center">
+              <h2 className="text-2xl font-semibold text-white mb-2">{receiver.name}</h2>
+              <p className="text-lg text-gray-400 mb-4">
+                {isRinging ? "Ringing..." : "Calling..."}
+              </p>
+              {isRinging && (
+                <div className="w-48 h-2 bg-gray-700 rounded-full mx-auto mb-8 overflow-hidden">
+                  <div className="h-full bg-green-500 rounded-full animate-pulse" style={{ width: "60%" }} />
+                </div>
+              )}
+              <button
+                onClick={endCall}
+                className="w-20 h-20 rounded-full bg-red-600 hover:bg-red-700 flex items-center justify-center"
+              >
+                <span className="text-3xl">📵</span>
+              </button>
+              <p className="text-gray-500 mt-4">Tap to cancel</p>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showCallScreen && inCall && callType !== "video" && (
         <div className="fixed inset-0 bg-gradient-to-b from-gray-800 to-gray-900 flex flex-col items-center justify-center z-50">
           <div className="text-center mb-8">
             <div className="w-28 h-28 mx-auto mb-4 rounded-full bg-gray-700 flex items-center justify-center">
@@ -593,6 +832,68 @@ export default function ChatBox({ receiver, onBack }) {
         </div>
       )}
 
+      {showCallScreen && inCall && callType === "video" && (
+        <div className="fixed inset-0 bg-gray-950 flex flex-col z-50">
+          {remoteStream ? (
+            <video
+              ref={remoteVideoRef}
+              autoPlay
+              playsInline
+              className="flex-1 w-full object-cover"
+            />
+          ) : (
+            <div className="flex-1 flex items-center justify-center">
+              <div className="text-center">
+                <div className="w-28 h-28 mx-auto mb-4 rounded-full bg-gray-800 flex items-center justify-center">
+                  <span className="text-5xl">👤</span>
+                </div>
+                <h2 className="text-2xl font-semibold text-white mb-1">{receiver.name}</h2>
+                <p className="text-lg text-gray-400">
+                  {callAccepted ? formatDuration(callDuration) : "Connecting..."}
+                </p>
+              </div>
+            </div>
+          )}
+          {localStream && (
+            <video
+              ref={localVideoRef}
+              autoPlay
+              muted
+              playsInline
+              className="absolute top-4 right-4 w-32 h-48 rounded-xl object-cover border-2 border-gray-600 shadow-lg z-10"
+            />
+          )}
+          <div className="absolute bottom-8 left-0 right-0 flex items-center justify-center gap-8 z-20">
+            <button
+              onClick={toggleMute}
+              className={`w-14 h-14 rounded-full flex items-center justify-center ${
+                isMuted ? "bg-red-500" : "bg-gray-700"
+              }`}
+            >
+              <span className="text-2xl">{isMuted ? "🔇" : "🎤"}</span>
+            </button>
+            <button
+              onClick={toggleCamera}
+              className={`w-14 h-14 rounded-full flex items-center justify-center ${
+                !isCameraOn ? "bg-red-500" : "bg-gray-700"
+              }`}
+            >
+              <span className="text-2xl">{isCameraOn ? "📹" : "🚫"}</span>
+            </button>
+            <button
+              onClick={endCall}
+              className="w-14 h-14 rounded-full bg-red-600 hover:bg-red-700 flex items-center justify-center"
+            >
+              <span className="text-2xl">📵</span>
+            </button>
+          </div>
+          <div className="absolute top-4 left-4 z-10">
+            <p className="text-white text-sm font-semibold">{receiver.name}</p>
+            <p className="text-gray-400 text-xs">{formatDuration(callDuration)}</p>
+          </div>
+        </div>
+      )}
+
       <div className="p-4 bg-white shadow flex items-center gap-3 mt-16">
         <button onClick={onBack} className="text-gray-600 hover:text-gray-800">
           ←
@@ -608,13 +909,22 @@ export default function ChatBox({ receiver, onBack }) {
         </div>
 
         {!inCall && !showCallScreen && (
-          <button
-            onClick={startCall}
-            disabled={calling || !onlineUsers.includes(String(receiver.id))}
-            className="bg-green-500 text-white px-3 py-2 rounded-full text-sm disabled:bg-gray-400"
-          >
-            {calling ? "Calling..." : "📞 Call"}
-          </button>
+          <>
+            <button
+              onClick={startCall}
+              disabled={calling || !onlineUsers.includes(String(receiver.id))}
+              className="bg-green-500 text-white px-3 py-2 rounded-full text-sm disabled:bg-gray-400"
+            >
+              📞
+            </button>
+            <button
+              onClick={startVideoCall}
+              disabled={calling || !onlineUsers.includes(String(receiver.id))}
+              className="bg-blue-500 text-white px-3 py-2 rounded-full text-sm disabled:bg-gray-400"
+            >
+              📹
+            </button>
+          </>
         )}
 
         {(inCall || showCallScreen) && (
