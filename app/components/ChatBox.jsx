@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import io from "socket.io-client";
 import { useSession } from "next-auth/react";
 
@@ -51,16 +51,18 @@ export default function ChatBox({ receiver, onBack }) {
     }
   }, [remoteStream]);
 
-  useEffect(() => {
-    if (localVideoRef.current && localStream) {
-      localVideoRef.current.srcObject = localStream;
-    }
+  const setLocalVideoRef = useCallback((el) => {
+    localVideoRef.current = el;
+    if (el) el.srcObject = localStream ?? null;
   }, [localStream]);
 
-  useEffect(() => {
-    if (remoteVideoRef.current && remoteStream) {
-      remoteVideoRef.current.srcObject = remoteStream;
-      remoteVideoRef.current.play().catch(err => console.log("Autoplay blocked:", err.message));
+  const setRemoteVideoRef = useCallback((el) => {
+    remoteVideoRef.current = el;
+    if (el) {
+      el.srcObject = remoteStream ?? null;
+      if (remoteStream) {
+        el.play().catch(err => console.log("Autoplay blocked:", err.message));
+      }
     }
   }, [remoteStream]);
 
@@ -659,6 +661,10 @@ export default function ChatBox({ receiver, onBack }) {
         setRemoteStream(event.streams[0]);
       };
 
+      if (!incomingCall.signalData || incomingCall.signalData.type !== "offer") {
+        console.error("Invalid signal data - not an offer:", incomingCall.signalData);
+        return;
+      }
       await pc.setRemoteDescription(new RTCSessionDescription(incomingCall.signalData));
       
       const answer = await pc.createAnswer();
@@ -757,7 +763,7 @@ export default function ChatBox({ receiver, onBack }) {
           <div className="relative w-full h-full flex flex-col items-center justify-center">
             {localStream && (
               <video
-                ref={localVideoRef}
+                ref={setLocalVideoRef}
                 autoPlay
                 muted
                 playsInline
@@ -836,7 +842,7 @@ export default function ChatBox({ receiver, onBack }) {
         <div className="fixed inset-0 bg-gray-950 flex flex-col z-50">
           {remoteStream ? (
             <video
-              ref={remoteVideoRef}
+              ref={setRemoteVideoRef}
               autoPlay
               playsInline
               className="flex-1 w-full object-cover"
@@ -856,7 +862,7 @@ export default function ChatBox({ receiver, onBack }) {
           )}
           {localStream && (
             <video
-              ref={localVideoRef}
+              ref={setLocalVideoRef}
               autoPlay
               muted
               playsInline
