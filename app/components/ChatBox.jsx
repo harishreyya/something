@@ -18,10 +18,19 @@ export default function ChatBox({ receiver, onBack }) {
   const [callEnded, setCallEnded] = useState(false);
   const [localStream, setLocalStream] = useState(null);
   const [remoteStream, setRemoteStream] = useState(null);
+  const [isMuted, setIsMuted] = useState(false);
+  const [isSpeakerOn, setIsSpeakerOn] = useState(true);
+  const [callDuration, setCallDuration] = useState(0);
+  const [isReceivingCall, setIsReceivingCall] = useState(false);
+  const [showCallScreen, setShowCallScreen] = useState(false);
+  const [isRinging, setIsRinging] = useState(false);
 
   const peerConnectionRef = useRef(null);
   const localAudioRef = useRef(null);
   const remoteAudioRef = useRef(null);
+  const callTimerRef = useRef(null);
+  const ringtoneOscillatorRef = useRef(null);
+  const ringtoneIntervalRef = useRef(null);
 
   const bottomRef = useRef();
 
@@ -45,8 +54,78 @@ export default function ChatBox({ receiver, onBack }) {
     { urls: "turn:global.metered.ca:443", username: "anonymous", credential: "anonymous" },
   ];
 
+  const startCallTimer = () => {
+    setCallDuration(0);
+    callTimerRef.current = setInterval(() => {
+      setCallDuration((prev) => prev + 1);
+    }, 1000);
+  };
+
+  const stopCallTimer = () => {
+    if (callTimerRef.current) {
+      clearInterval(callTimerRef.current);
+      callTimerRef.current = null;
+    }
+    setCallDuration(0);
+  };
+
+  const formatDuration = (seconds) => {
+    const mins = Math.floor(seconds / 60);
+    const secs = seconds % 60;
+    return `${mins.toString().padStart(2, "0")}:${secs.toString().padStart(2, "0")}`;
+  };
+
+  const playRingtone = () => {
+    if (ringtoneOscillatorRef.current || ringtoneIntervalRef.current) return;
+    
+    const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+    let count = 0;
+    
+    const playBeep = () => {
+      const oscillator = audioContext.createOscillator();
+      const gainNode = audioContext.createGain();
+      
+      oscillator.connect(gainNode);
+      gainNode.connect(audioContext.destination);
+      
+      oscillator.frequency.value = 440;
+      oscillator.type = "sine";
+      gainNode.gain.value = 0.3;
+      
+      oscillator.start();
+      gainNode.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + 0.3);
+      oscillator.stop(audioContext.currentTime + 0.3);
+    };
+    
+    playBeep();
+    ringtoneIntervalRef.current = setInterval(() => {
+      count++;
+      if (count < 6) playBeep();
+      else {
+        count = 0;
+      }
+    }, 400);
+    
+    ringtoneOscillatorRef.current = audioContext;
+  };
+
+  const stopRingtone = () => {
+    if (ringtoneIntervalRef.current) {
+      clearInterval(ringtoneIntervalRef.current);
+      ringtoneIntervalRef.current = null;
+    }
+    if (ringtoneOscillatorRef.current) {
+      ringtoneOscillatorRef.current.close();
+      ringtoneOscillatorRef.current = null;
+    }
+  };
+
   const endCall = (triggeredByRemote = false) => {
-    console.log("Ending call", triggeredByRemote ? "(remote)" : "(local)");
+    console.log("=== END CALL START === triggeredByRemote:", triggeredByRemote);
+    console.trace("Stack trace");
+    stopRingtone();
+    stopCallTimer();
+    setShowCallScreen(false);
     
     if (!localStream && !peerConnectionRef.current && !remoteStream) {
       console.log("Call already ended, ignoring");
@@ -69,12 +148,32 @@ export default function ChatBox({ receiver, onBack }) {
     setCallAccepted(false);
     setCallEnded(true);
     setIncomingCall(null);
+    setIsReceivingCall(false);
+    setIsMuted(false);
+    setIsSpeakerOn(true);
 
     if (!triggeredByRemote && socket && receiver?.id) {
+      console.log("Emitting end_call to", receiver.id);
       socket.emit("end_call", { receiverId: receiver.id });
     }
 
     setTimeout(() => setCallEnded(false), 1000);
+  };
+
+  const toggleMute = () => {
+    if (localStream) {
+      localStream.getAudioTracks().forEach((track) => {
+        track.enabled = isMuted;
+      });
+      setIsMuted(!isMuted);
+    }
+  };
+
+  const toggleSpeaker = () => {
+    if (remoteAudioRef.current) {
+      remoteAudioRef.current.volume = isSpeakerOn ? 0 : 1;
+      setIsSpeakerOn(!isSpeakerOn);
+    }
   };
 
   useEffect(() => {
@@ -116,10 +215,21 @@ export default function ChatBox({ receiver, onBack }) {
       console.log("Incoming call from", callerId, "signal type:", signalData?.type);
       if (signalData?.type === "offer") {
         setIncomingCall({ callerId, callerName, signalData });
+        setIsReceivingCall(true);
+        setShowCallScreen(true);
+        playRingtone();
       }
     });
 
-    return () => socket.off("incoming_call");
+    socket.on("call_ringing", () => {
+      console.log("Call is ringing...");
+      setIsRinging(true);
+    });
+
+    return () => {
+      socket.off("incoming_call");
+      socket.off("call_ringing");
+    };
   }, [socket, session]);
 
   useEffect(() => {
@@ -127,11 +237,13 @@ export default function ChatBox({ receiver, onBack }) {
 
     socket.on("call_accepted", async ({ signalData, receiverId }) => {
       console.log("Call accepted, signal type:", signalData?.type);
+      stopRingtone();
+      setCallAccepted(true);
+      startCallTimer();
       try {
         const pc = peerConnectionRef.current;
         if (pc && signalData?.type === "answer") {
           await pc.setRemoteDescription(new RTCSessionDescription(signalData));
-          setCallAccepted(true);
           console.log("Remote description set successfully");
         }
       } catch (err) {
@@ -139,9 +251,15 @@ export default function ChatBox({ receiver, onBack }) {
       }
     });
 
-    socket.on("call_ended", () => {
-      console.log("Received call_ended event");
+    const handleCallEnded = () => {
+      alert("Call ended by other user!");
+      console.log("RECEIVED call_ended from other user");
       endCall(true);
+    };
+    socket.on("call_ended", handleCallEnded);
+    socket.io.on("reconnect", () => {
+      console.log("Socket reconnected, re-adding call_ended listener");
+      socket.on("call_ended", handleCallEnded);
     });
 
     socket.on("ice_candidate", async ({ candidate, from }) => {
@@ -163,7 +281,7 @@ export default function ChatBox({ receiver, onBack }) {
 
     return () => {
       socket.off("call_accepted");
-      socket.off("call_ended");
+      socket.off("call_ended", handleCallEnded);
       socket.off("ice_candidate");
     };
   }, [socket]);
@@ -214,6 +332,19 @@ export default function ChatBox({ receiver, onBack }) {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
+  useEffect(() => {
+    return () => {
+      stopRingtone();
+      stopCallTimer();
+      if (localStream) {
+        localStream.getTracks().forEach((track) => track.stop());
+      }
+      if (peerConnectionRef.current) {
+        peerConnectionRef.current.close();
+      }
+    };
+  }, []);
+
   const sendMessage = async () => {
     if (!text.trim()) return;
 
@@ -246,6 +377,7 @@ export default function ChatBox({ receiver, onBack }) {
   const startCall = async () => {
     try {
       setCalling(true);
+      setShowCallScreen(true);
       console.log("Starting call...");
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       setLocalStream(stream);
@@ -268,7 +400,10 @@ export default function ChatBox({ receiver, onBack }) {
 
       pc.ontrack = (event) => {
         console.log("Received remote track");
+        stopRingtone();
         setRemoteStream(event.streams[0]);
+        setInCall(true);
+        startCallTimer();
       };
 
       const offer = await pc.createOffer();
@@ -282,9 +417,11 @@ export default function ChatBox({ receiver, onBack }) {
 
       console.log("Offer sent");
       setInCall(true);
+      playRingtone();
     } catch (err) {
       console.error("Error starting call:", err);
       setCalling(false);
+      setShowCallScreen(false);
     }
   };
 
@@ -344,6 +481,118 @@ export default function ChatBox({ receiver, onBack }) {
 
   return (
     <div className="flex flex-col h-screen bg-gray-100">
+      <audio ref={localAudioRef} autoPlay muted playsInline />
+      <audio ref={remoteAudioRef} autoPlay playsInline />
+
+      {showCallScreen && incomingCall && (
+        <div className="fixed inset-0 bg-gray-900 bg-opacity-95 flex flex-col items-center justify-center z-50">
+          <div className="text-center">
+            <div className="w-24 h-24 mx-auto mb-6 rounded-full bg-gray-700 flex items-center justify-center">
+              <span className="text-4xl">👤</span>
+            </div>
+            <h2 className="text-2xl font-semibold text-white mb-2">{incomingCall.callerName}</h2>
+            <p className="text-lg text-gray-400 mb-8">Incoming call...</p>
+            <div className="flex items-center justify-center gap-8">
+              <button
+                onClick={() => {
+                  stopRingtone();
+                  setIncomingCall(null);
+                  setShowCallScreen(false);
+                  setIsReceivingCall(false);
+                  if (socket && incomingCall?.callerId) {
+                    socket.emit("end_call", { receiverId: incomingCall.callerId });
+                  }
+                }}
+                className="w-16 h-16 rounded-full bg-red-600 hover:bg-red-700 flex items-center justify-center"
+              >
+                <span className="text-2xl">📵</span>
+              </button>
+              <button
+                onClick={() => {
+                  stopRingtone();
+                  answerCall();
+                }}
+                className="w-16 h-16 rounded-full bg-green-500 hover:bg-green-600 flex items-center justify-center animate-pulse"
+              >
+                <span className="text-2xl">📞</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showCallScreen && calling && !inCall && (
+        <div className="fixed inset-0 bg-gray-900 bg-opacity-95 flex flex-col items-center justify-center z-50">
+          <div className="text-center">
+            <div className="w-24 h-24 mx-auto mb-6 rounded-full bg-gray-700 flex items-center justify-center">
+              <span className="text-4xl">👤</span>
+            </div>
+            <h2 className="text-2xl font-semibold text-white mb-2">{receiver.name}</h2>
+            <p className="text-lg text-gray-400 mb-4">
+              {isRinging ? "Ringing..." : "Calling..."}
+            </p>
+            {isRinging && (
+              <div className="w-48 h-2 bg-gray-700 rounded-full mx-auto mb-8 overflow-hidden">
+                <div className="h-full bg-green-500 rounded-full animate-pulse" style={{ width: "60%" }} />
+              </div>
+            )}
+            <button
+              onClick={endCall}
+              className="w-20 h-20 rounded-full bg-red-600 hover:bg-red-700 flex items-center justify-center"
+            >
+              <span className="text-3xl">📵</span>
+            </button>
+            <p className="text-gray-500 mt-4">Tap to cancel</p>
+          </div>
+        </div>
+      )}
+
+      {showCallScreen && inCall && (
+        <div className="fixed inset-0 bg-gradient-to-b from-gray-800 to-gray-900 flex flex-col items-center justify-center z-50">
+          <div className="text-center mb-8">
+            <div className="w-28 h-28 mx-auto mb-4 rounded-full bg-gray-700 flex items-center justify-center">
+              <span className="text-5xl">👤</span>
+            </div>
+            <h2 className="text-2xl font-semibold text-white mb-1">{receiver.name}</h2>
+            <p className="text-lg text-gray-400">
+              {callAccepted ? formatDuration(callDuration) : "Connecting..."}
+            </p>
+            {callAccepted && (
+              <p className="text-sm text-green-400 mt-1">Connected</p>
+            )}
+          </div>
+
+          <div className="flex items-center justify-center gap-12 mt-8">
+            <button
+              onClick={toggleMute}
+              className={`w-14 h-14 rounded-full flex items-center justify-center ${
+                isMuted ? "bg-red-500" : "bg-gray-700"
+              }`}
+            >
+              <span className="text-2xl">{isMuted ? "🔇" : "🎤"}</span>
+            </button>
+            <button
+              onClick={toggleSpeaker}
+              className={`w-14 h-14 rounded-full flex items-center justify-center ${
+                !isSpeakerOn ? "bg-red-500" : "bg-gray-700"
+              }`}
+            >
+              <span className="text-2xl">{isSpeakerOn ? "🔊" : "🔈"}</span>
+            </button>
+            <button
+              onClick={endCall}
+              className="w-14 h-14 rounded-full bg-red-600 hover:bg-red-700 flex items-center justify-center"
+            >
+              <span className="text-2xl">📵</span>
+            </button>
+          </div>
+
+          <p className="text-gray-500 mt-8 text-sm">
+            {isMuted ? "Muted" : "Unmuted"} • {isSpeakerOn ? "Speaker on" : "Speaker off"}
+          </p>
+        </div>
+      )}
+
       <div className="p-4 bg-white shadow flex items-center gap-3 mt-16">
         <button onClick={onBack} className="text-gray-600 hover:text-gray-800">
           ←
@@ -358,7 +607,7 @@ export default function ChatBox({ receiver, onBack }) {
           </p>
         </div>
 
-        {!inCall && (
+        {!inCall && !showCallScreen && (
           <button
             onClick={startCall}
             disabled={calling || !onlineUsers.includes(String(receiver.id))}
@@ -368,7 +617,7 @@ export default function ChatBox({ receiver, onBack }) {
           </button>
         )}
 
-        {inCall && (
+        {(inCall || showCallScreen) && (
           <button
             onClick={endCall}
             className="bg-red-500 text-white px-3 py-2 rounded-full text-sm"
@@ -377,34 +626,6 @@ export default function ChatBox({ receiver, onBack }) {
           </button>
         )}
       </div>
-
-      {inCall && (
-        <div className="bg-green-100 p-3 text-center text-green-800 flex items-center justify-center gap-2">
-          <span className="animate-pulse">🔊</span>
-          {callAccepted ? "In call..." : calling ? "Calling..." : "Incoming call..."}
-        </div>
-      )}
-
-      <audio ref={localAudioRef} autoPlay muted playsInline />
-      <audio ref={remoteAudioRef} autoPlay playsInline />
-
-      {incomingCall && !inCall && (
-        <div className="bg-blue-100 p-4 text-center flex items-center justify-center gap-3">
-          <span>📞 Incoming call from {incomingCall.callerName}</span>
-          <button
-            onClick={answerCall}
-            className="bg-green-500 text-white px-4 py-2 rounded-full"
-          >
-            Answer
-          </button>
-          <button
-            onClick={() => setIncomingCall(null)}
-            className="bg-red-500 text-white px-4 py-2 rounded-full"
-          >
-            Decline
-          </button>
-        </div>
-      )}
 
       <div className="flex-1 overflow-y-auto p-4 space-y-3">
         {messages.map((m, i) => {

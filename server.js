@@ -58,6 +58,11 @@ socket.on("mark_seen", ({ senderId }) => {
           signalData,
           callerName: callerId,
         });
+        
+        const callerSocket = users[String(callerId)];
+        if (callerSocket) {
+          io.to(callerSocket).emit("call_ringing");
+        }
       } else if (signalData.type === "candidate") {
         io.to(receiverSocket).emit("ice_candidate", {
           candidate: signalData.candidate,
@@ -86,9 +91,13 @@ socket.on("mark_seen", ({ senderId }) => {
   });
 
   socket.on("end_call", ({ receiverId }) => {
+    console.log("end_call received from", socket.id, "to", receiverId);
     const receiverSocket = users[String(receiverId)];
     if (receiverSocket) {
       io.to(receiverSocket).emit("call_ended");
+      console.log("call_ended emitted to", receiverId);
+    } else {
+      console.log("Receiver socket not found for", receiverId);
     }
   });
 
