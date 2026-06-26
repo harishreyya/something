@@ -107,6 +107,115 @@ A full-stack social chat application with real-time messaging, audio/video calli
 6. **Chat** (`/chat?userId=X`) → select a friend from sidebar → load conversation history → send/receive messages in real-time → initiate audio/video calls
 
 ---
+# Some Thing — Real-time Social Chat App
+
+A full-stack social chat application with real-time messaging, audio/video calling, friend management, and Google OAuth authentication. Built with Next.js and powered by WebRTC + Socket.IO.
+
+---
+
+## Features
+
+### Authentication
+- Google OAuth login via NextAuth.js
+- Session-based protection — unauthenticated users are redirected to `/login`
+- Persistent sessions stored in MongoDB via Prisma adapter
+
+### Real-Time Messaging
+- Instant messaging powered by **Socket.IO** (dedicated server on port 3001)
+- Message history persisted to MongoDB
+- Read receipts (double-check marks) sent via Socket.IO events
+- Each conversation is loaded on-demand with full scrollable history
+
+### Audio & Video Calling (WebRTC)
+- Peer-to-peer audio and video calls using native WebRTC APIs
+- Socket.IO signaling for offer/answer/ICE candidate exchange
+- Google STUN + Metered TURN servers for connectivity
+- Call timer, mute/unmute, speaker toggle, camera toggle
+- Ringtone notification (oscillator-based) for incoming calls
+- Dedicated incoming-call screen with accept/reject
+
+### Friend Management
+- Send, accept, and reject friend requests
+- Real-time notification bell showing pending requests
+- Accept/reject from the notification dropdown
+- Unfriend any existing friend
+- Relationship status tracking: `NONE`, `PENDING`, `FRIENDS`
+
+### User Search
+- Debounced search (500ms) by name or email
+- Case-insensitive matching
+- Displays relationship status for each result
+- Current user excluded from results
+
+### Responsive Chat UI
+- Desktop sidebar (320px) with friend list and online status indicators
+- Mobile swipeable sidebar via `react-swipeable` (swipe left/right gestures)
+- Overlay backdrop on mobile
+- Online/offline indicators via Socket.IO `online_users` tracking
+
+---
+
+## Tech Stack
+
+| Category | Technologies |
+|---|---|
+| **Framework** | Next.js 16 (React 19, App Router) |
+| **Language** | JavaScript (JSX) |
+| **Authentication** | NextAuth.js (Google OAuth + JWT strategy) |
+| **Database** | MongoDB (Atlas) via Prisma ORM |
+| **Real-Time** | Socket.IO (server + client) |
+| **WebRTC** | Native browser APIs (STUN/TURN) |
+| **Styling** | Tailwind CSS v4 |
+| **Fonts** | Geist (next/font/google) |
+| **Gestures** | react-swipeable |
+| **Linting** | ESLint (next/core-web-vitals) |
+
+---
+
+## Architecture & Flow
+
+```
+┌──────────────────────────────────────────────────┐
+│                  Browser                          │
+│  ┌──────────┐  ┌──────────┐  ┌────────────────┐ │
+│  │ NextAuth  │  │ Socket.IO│  │   WebRTC       │ │
+│  │ (Client)  │  │ (Client) │  │ (PeerConnection)│ │
+│  └─────┬────┘  └────┬─────┘  └───────┬────────┘ │
+│        │             │                │           │
+└────────┼─────────────┼────────────────┼───────────┘
+         │             │                │
+    ┌────▼─────────────▼────────────────▼───────────┐
+    │              Next.js Server (:3000)             │
+    │  ┌──────────┐  ┌──────────────────────────┐   │
+    │  │ API Routes│  │   Server Components      │   │
+    │  │ (REST)    │  │   (SSR / Page Rendering) │   │
+    │  └─────┬────┘  └──────────────────────────┘   │
+    └────────┼──────────────────────────────────────┘
+             │
+    ┌────────▼──────────────────────────────────────┐
+    │         Socket.IO Server (:3001)                │
+    │  ┌──────────┐  ┌──────────┐  ┌────────────┐   │
+    │  │Messaging │  │ Signaling│  │ Online      │   │
+    │  │ Events   │  │ (WebRTC) │  │ Tracking    │   │
+    │  └─────┬────┘  └──────────┘  └────────────┘   │
+    └────────┼───────────────────────────────────────┘
+             │
+    ┌────────▼──────────────────────────────────────┐
+    │             MongoDB (Atlas)                     │
+    │  Users │ Messages │ Friends │ FriendRequests   │
+    └────────────────────────────────────────────────┘
+```
+
+### App Flow
+
+1. User visits any protected route → `getServerSession` checks auth → redirects to `/login` if unauthenticated
+2. **Login** → Google OAuth → session persisted via Prisma adapter → redirected to home (`/`)
+3. **Home** (`/`) → shows user profile, avatar, navigation
+4. **Search** (`/search`) → find users by name/email → send friend requests
+5. **Friends** (`/friends`) → view/manage friend list → unfriend
+6. **Chat** (`/chat?userId=X`) → select a friend from sidebar → load conversation history → send/receive messages in real-time → initiate audio/video calls
+
+---
 
 ## Getting Started
 
@@ -228,14 +337,7 @@ Open [http://localhost:3000](http://localhost:3000).
 
 ## Deployment
 
-The app is configured for deployment on **Vercel**. The Socket.IO server would need a separate hosting solution (e.g., Railway, Render, or a VPS).
-
-```bash
-npm run build
-```
+The app is configured for deployment on **Vercel**. The Socket.IO server would need a separate hosting, in this **Render** is used for deployment.
 
 ---
 
-## License
-
-MIT
