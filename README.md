@@ -2,6 +2,8 @@
 
 A full-stack social chat application with real-time messaging, audio/video calling, friend management, and Google OAuth authentication. Built with Next.js and powered by WebRTC + Socket.IO.
 
+#### Live demo: [https://some-thing-nu.vercel.app](https://some-thing-nu.vercel.app)
+
 ---
 
 ## Features
